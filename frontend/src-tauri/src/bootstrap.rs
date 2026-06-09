@@ -374,6 +374,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
     if venv_py.is_file() && backend_dir.is_dir() {
         let mut uvicorn_check_cmd = Command::new(&venv_py);
         scrub_python_env(&mut uvicorn_check_cmd); // #144: don't inherit AppImage's bundled Python
+        crate::tools::hide_window(&mut uvicorn_check_cmd);
         let uvicorn_check = uvicorn_check_cmd
             .args(["-c", "import uvicorn"])
             .stdout(Stdio::null())
@@ -388,6 +389,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
         let pkg_resources_ok = if matches!(uvicorn_check, Ok(ref s) if s.success()) {
             let mut pr_check = Command::new(&venv_py);
             scrub_python_env(&mut pr_check);
+            crate::tools::hide_window(&mut pr_check);
             matches!(
                 pr_check
                     .args(["-c", "import pkg_resources"])
@@ -455,6 +457,8 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
         };
         let mut repair_cmd = Command::new(&uv_path);
         scrub_python_env(&mut repair_cmd); // #144: don't inherit AppImage's bundled Python
+        apply_uv_http_env(&mut repair_cmd);
+        crate::tools::hide_window(&mut repair_cmd);
         let has_lockfile = project_dir.join("uv.lock").is_file();
         if has_lockfile {
             repair_cmd.args(["sync", "--frozen", "--no-dev", "--verbose"]);
@@ -462,7 +466,23 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
             repair_cmd.args(["sync", "--no-dev", "--verbose"]);
         }
         repair_cmd.current_dir(&project_dir);
-        let repair_status = run_streaming(app, "installing_deps", &mut repair_cmd);
+        let mut repair_status = run_streaming(app, "installing_deps", &mut repair_cmd);
+        if !matches!(repair_status, Ok(ref s) if s.success()) {
+            log::warn!("Repair uv sync failed; retrying in offline mode (UV_OFFLINE=true)");
+            emit_log(app, "installing_deps", "Repair failed. Retrying in offline mode...");
+            let mut offline_repair = Command::new(&uv_path);
+            scrub_python_env(&mut offline_repair);
+            apply_uv_http_env(&mut offline_repair);
+            crate::tools::hide_window(&mut offline_repair);
+            offline_repair.env("UV_OFFLINE", "true");
+            if has_lockfile {
+                offline_repair.args(["sync", "--frozen", "--no-dev", "--verbose"]);
+            } else {
+                offline_repair.args(["sync", "--no-dev", "--verbose"]);
+            }
+            offline_repair.current_dir(&project_dir);
+            repair_status = run_streaming(app, "installing_deps", &mut offline_repair);
+        }
         if matches!(repair_status, Ok(ref s) if s.success()) {
             // #248: after the repair sync, ensure pkg_resources landed. The repair
             // path is also triggered when pkg_resources is missing (see above), so
@@ -470,6 +490,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
             // (e.g. if the bundled uv.lock still pins setuptools>=80 somehow).
             let mut pr_repair_check = Command::new(&venv_py);
             scrub_python_env(&mut pr_repair_check);
+            crate::tools::hide_window(&mut pr_repair_check);
             let pr_ok = matches!(
                 pr_repair_check
                     .args(["-c", "import pkg_resources"])
@@ -485,6 +506,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
                 let mut st_cmd = Command::new(&uv_path);
                 scrub_python_env(&mut st_cmd);
                 apply_uv_http_env(&mut st_cmd);
+                crate::tools::hide_window(&mut st_cmd);
                 st_cmd
                     .args(["pip", "install", "setuptools>=75,<80"])
                     .current_dir(&project_dir);
@@ -499,6 +521,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
                 // Re-verify pkg_resources is importable after the targeted install.
                 let mut pr_post_check = Command::new(&venv_py);
                 scrub_python_env(&mut pr_post_check);
+                crate::tools::hide_window(&mut pr_post_check);
                 let pr_final_ok = matches!(
                     pr_post_check
                         .args(["-c", "import pkg_resources"])
@@ -633,6 +656,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
         let mut venv_cmd = Command::new(&uv_path);
         scrub_python_env(&mut venv_cmd); // #144: don't inherit AppImage's bundled Python
         apply_uv_http_env(&mut venv_cmd);
+        crate::tools::hide_window(&mut venv_cmd);
         for (k, v) in envs {
             venv_cmd.env(k, v);
         }
@@ -655,6 +679,7 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
     let mut sync_cmd = Command::new(&uv_path);
     scrub_python_env(&mut sync_cmd); // #144: don't inherit AppImage's bundled Python
     apply_uv_http_env(&mut sync_cmd);
+    crate::tools::hide_window(&mut sync_cmd);
     let has_lockfile = project_dir.join("uv.lock").is_file();
     if has_lockfile {
         sync_cmd
@@ -672,7 +697,31 @@ pub fn ensure_venv_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress:
     } else if get_effective_region(app) == "china" {
         sync_cmd.env("UV_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
     }
-    let sync_status = run_streaming(app, "installing_deps", &mut sync_cmd);
+    let mut sync_status = run_streaming(app, "installing_deps", &mut sync_cmd);
+    if !matches!(sync_status, Ok(ref s) if s.success()) {
+        log::warn!("uv sync failed; retrying in offline mode (UV_OFFLINE=true)");
+        emit_log(app, "installing_deps", "Dependency install failed. Retrying in offline mode...");
+        let mut offline_sync = Command::new(&uv_path);
+        scrub_python_env(&mut offline_sync);
+        apply_uv_http_env(&mut offline_sync);
+        crate::tools::hide_window(&mut offline_sync);
+        offline_sync.env("UV_OFFLINE", "true");
+        if has_lockfile {
+            offline_sync
+                .args(["sync", "--frozen", "--no-dev", "--verbose"])
+                .current_dir(&project_dir);
+        } else {
+            offline_sync
+                .args(["sync", "--no-dev", "--verbose"])
+                .current_dir(&project_dir);
+        }
+        if let Some(pypi) = custom_mirrors.pypi_index.as_deref() {
+            offline_sync.env("UV_INDEX_URL", pypi);
+        } else if get_effective_region(app) == "china" {
+            offline_sync.env("UV_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
+        }
+        sync_status = run_streaming(app, "installing_deps", &mut offline_sync);
+    }
     if !matches!(sync_status, Ok(ref s) if s.success()) {
         fail(
             progress,
@@ -692,6 +741,7 @@ docs/install/troubleshooting.md).",
     {
         let mut pr_verify = Command::new(&venv_py);
         scrub_python_env(&mut pr_verify);
+        crate::tools::hide_window(&mut pr_verify);
         let pr_ok = matches!(
             pr_verify
                 .args(["-c", "import pkg_resources"])
@@ -707,6 +757,7 @@ docs/install/troubleshooting.md).",
             let mut st_cmd = Command::new(&uv_path);
             scrub_python_env(&mut st_cmd);
             apply_uv_http_env(&mut st_cmd);
+            crate::tools::hide_window(&mut st_cmd);
             st_cmd
                 .args(["pip", "install", "setuptools>=75,<80"])
                 .current_dir(&project_dir);
@@ -731,6 +782,7 @@ docs/install/troubleshooting.md).",
         let mut rocm_cmd = Command::new(&uv_path);
         scrub_python_env(&mut rocm_cmd); // #144: don't inherit AppImage's bundled Python
         apply_uv_http_env(&mut rocm_cmd);
+        crate::tools::hide_window(&mut rocm_cmd);
         rocm_cmd.args(rocm_torch_reinstall_args(&rocm_url)).current_dir(&project_dir);
         let rocm_status = run_streaming(app, "installing_deps", &mut rocm_cmd);
         if !matches!(rocm_status, Ok(ref s) if s.success()) {

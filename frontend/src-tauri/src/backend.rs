@@ -78,9 +78,10 @@ fn ureq_get_with_timeout(url: &str, timeout: Duration) -> Result<String, String>
 /// Kill whatever process owns the port.
 #[cfg(unix)]
 pub fn kill_orphan_on_port(port: u16) {
-    if let Ok(out) = Command::new("lsof")
-        .args(["-ti", &format!(":{}", port)])
-        .output()
+    let mut cmd = Command::new("lsof");
+    cmd.args(["-ti", &format!(":{}", port)]);
+    crate::tools::hide_window(&mut cmd);
+    if let Ok(out) = cmd.output()
     {
         if out.status.success() {
             let pids = String::from_utf8_lossy(&out.stdout);
@@ -100,7 +101,10 @@ pub fn kill_orphan_on_port(port: u16) {
 pub fn kill_orphan_on_port(port: u16) {
     // `netstat -ano` lists listening sockets with their owning PID.
     // Parse the output to find the process listening on exactly `port`.
-    let out = match Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
+    let mut cmd = Command::new("netstat");
+    cmd.args(["-ano", "-p", "TCP"]);
+    crate::tools::hide_window(&mut cmd);
+    let out = match cmd.output() {
         Ok(o) => o,
         Err(_) => return,
     };
@@ -122,9 +126,10 @@ pub fn kill_orphan_on_port(port: u16) {
         if let Some(pid_str) = parts.last() {
             if let Ok(pid) = pid_str.parse::<u32>() {
                 log::warn!("Killing orphan process {} on port {} (Windows)", pid, port);
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/F"])
-                    .output();
+                let mut cmd = Command::new("taskkill");
+                cmd.args(["/PID", &pid.to_string(), "/F"]);
+                crate::tools::hide_window(&mut cmd);
+                let _ = cmd.output();
             }
         }
     }
@@ -278,6 +283,7 @@ pub fn spawn_backend<R: tauri::Runtime>(app: &tauri::AppHandle<R>, progress: Opt
     }
     let mut cmd = Command::new(&python);
     cmd.env_remove("PYTHONHOME").env_remove("PYTHONPATH").env_remove("LD_LIBRARY_PATH");
+    crate::tools::hide_window(&mut cmd);
     for (k, v) in &env {
         cmd.env(k, v);
     }

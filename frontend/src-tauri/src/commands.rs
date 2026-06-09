@@ -458,11 +458,11 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     {
         use std::process::Command;
         let value = format!("\"{}\" --pill", exe_str);
-        let status = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                   "/v", "OmniVoicePill", "/t", "REG_SZ", "/d", &value, "/f"])
-            .status()
-            .map_err(|e| format!("reg add: {e}"))?;
+        let mut reg_cmd = Command::new("reg");
+        reg_cmd.args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+               "/v", "OmniVoicePill", "/t", "REG_SZ", "/d", &value, "/f"]);
+        crate::tools::hide_window(&mut reg_cmd);
+        let status = reg_cmd.status().map_err(|e| format!("reg add: {e}"))?;
         if !status.success() {
             return Err("Failed to add registry key".into());
         }
@@ -501,10 +501,11 @@ pub fn disable_pill_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let _ = Command::new("reg")
-            .args(["delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                   "/v", "OmniVoicePill", "/f"])
-            .status();
+        let mut reg_cmd = Command::new("reg");
+        reg_cmd.args(["delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+               "/v", "OmniVoicePill", "/f"]);
+        crate::tools::hide_window(&mut reg_cmd);
+        let _ = reg_cmd.status();
         log::info!("Pill autostart disabled via registry");
         return Ok(());
     }
@@ -530,10 +531,11 @@ pub fn is_pill_autostart_enabled() -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let out = Command::new("reg")
-            .args(["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                   "/v", "OmniVoicePill"])
-            .output();
+        let mut reg_cmd = Command::new("reg");
+        reg_cmd.args(["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+               "/v", "OmniVoicePill"]);
+        crate::tools::hide_window(&mut reg_cmd);
+        let out = reg_cmd.output();
         return out.map(|o| o.status.success()).unwrap_or(false);
     }
 

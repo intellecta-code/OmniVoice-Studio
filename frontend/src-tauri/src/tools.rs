@@ -97,11 +97,12 @@ pub fn install_ffmpeg_standalone(dest: &Path, region: &str) -> io::Result<()> {
         let brew_path = brew_candidates.iter().find(|p| PathBuf::from(p).is_file());
         if let Some(brew) = brew_path {
             log::info!("Installing ffmpeg via Homebrew (native arm64)");
-            let status = Command::new(brew)
-                .args(["install", "ffmpeg"])
+            let mut cmd = Command::new(brew);
+            cmd.args(["install", "ffmpeg"])
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+                .stderr(Stdio::null());
+            hide_window(&mut cmd);
+            let status = cmd.status();
             if matches!(status, Ok(ref s) if s.success()) {
                 // brew install succeeded — ffmpeg/ffprobe are now on PATH
                 // at /opt/homebrew/bin/ or /usr/local/bin/. No need to
@@ -134,14 +135,15 @@ pub fn install_ffmpeg_standalone(dest: &Path, region: &str) -> io::Result<()> {
             let mut zip_file = fs::File::create(&zip_path)?;
             io::copy(&mut resp.into_reader(), &mut zip_file)?;
             drop(zip_file);
-            let status = Command::new("unzip")
-                .args(["-o", "-j"])
+            let mut cmd = Command::new("unzip");
+            cmd.args(["-o", "-j"])
                 .arg(&zip_path)
                 .arg("-d")
                 .arg(dest)
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?;
+                .stderr(Stdio::null());
+            hide_window(&mut cmd);
+            let status = cmd.status()?;
             let _ = fs::remove_file(&zip_path);
             if !status.success() {
                 return Err(io::Error::new(io::ErrorKind::Other, format!("unzip {} failed", tool)));
@@ -183,14 +185,15 @@ pub fn install_ffmpeg_standalone(dest: &Path, region: &str) -> io::Result<()> {
         let mut archive_file = fs::File::create(&archive_path)?;
         io::copy(&mut resp.into_reader(), &mut archive_file)?;
         drop(archive_file);
-        let status = Command::new("tar")
-            .args(["-xJf"])
+        let mut cmd = Command::new("tar");
+        cmd.args(["-xJf"])
             .arg(&archive_path)
             .arg("-C")
             .arg(dest)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
+            .stderr(Stdio::null());
+        hide_window(&mut cmd);
+        let status = cmd.status()?;
         let _ = fs::remove_file(&archive_path);
         if !status.success() {
             return Err(io::Error::new(io::ErrorKind::Other, "tar -xJf ffmpeg failed"));
@@ -286,7 +289,10 @@ pub fn resolve_ffmpeg<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_data: &P
         log::info!("Using cached ffmpeg at {}", cached.display());
         return Some(cached);
     }
-    if Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+    let mut check_cmd = Command::new("ffmpeg");
+    check_cmd.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+    hide_window(&mut check_cmd);
+    if check_cmd.status().map(|s| s.success()).unwrap_or(false) {
         log::info!("Using system ffmpeg from PATH");
         return Some(PathBuf::from("ffmpeg"));
     }
@@ -303,7 +309,10 @@ pub fn resolve_ffmpeg<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_data: &P
                     return Some(PathBuf::from(p));
                 }
             }
-            if Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+            let mut check_cmd2 = Command::new("ffmpeg");
+            check_cmd2.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+            hide_window(&mut check_cmd2);
+            if check_cmd2.status().map(|s| s.success()).unwrap_or(false) {
                 return Some(PathBuf::from("ffmpeg"));
             }
             log::warn!("ffmpeg install completed but binary not found");
@@ -343,7 +352,10 @@ pub fn resolve_ffprobe<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_data: &
         log::info!("Using cached ffprobe at {}", cached.display());
         return Some(cached);
     }
-    if Command::new("ffprobe").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+    let mut check_cmd = Command::new("ffprobe");
+    check_cmd.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+    hide_window(&mut check_cmd);
+    if check_cmd.status().map(|s| s.success()).unwrap_or(false) {
         log::info!("Using system ffprobe from PATH");
         return Some(PathBuf::from("ffprobe"));
     }
@@ -358,7 +370,10 @@ pub fn resolve_ffprobe<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_data: &
                 return Some(PathBuf::from(p));
             }
         }
-        if Command::new("ffprobe").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+        let mut check_cmd2 = Command::new("ffprobe");
+        check_cmd2.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+        hide_window(&mut check_cmd2);
+        if check_cmd2.status().map(|s| s.success()).unwrap_or(false) {
             return Some(PathBuf::from("ffprobe"));
         }
     }
@@ -379,7 +394,10 @@ pub fn resolve_uv<R: tauri::Runtime>(
         log::info!("Using bundled uv at {}", p.display());
         return Ok(p);
     }
-    if Command::new("uv").arg("--version").output().is_ok() {
+    let mut check_cmd = Command::new("uv");
+    check_cmd.arg("--version");
+    hide_window(&mut check_cmd);
+    if check_cmd.output().is_ok() {
         log::info!("Using system uv from PATH");
         return Ok(PathBuf::from("uv"));
     }
@@ -408,18 +426,19 @@ fn install_uv_standalone(dest: &Path, _region: &str) -> io::Result<PathBuf> {
 
     #[cfg(unix)]
     {
-        let status = Command::new("sh")
-            .args([
-                "-c",
-                &format!(
-                    "curl -LsSf https://astral.sh/uv/{}/install.sh | sh -s -- --no-modify-path",
-                    UV_VERSION
-                ),
-            ])
-            .env("UV_INSTALL_DIR", dest)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .status()
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            &format!(
+                "curl -LsSf https://astral.sh/uv/{}/install.sh | sh -s -- --no-modify-path",
+                UV_VERSION
+            ),
+        ])
+        .env("UV_INSTALL_DIR", dest)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        hide_window(&mut cmd);
+        let status = cmd.status()
             .map_err(|e| io::Error::new(
                 io::ErrorKind::Other,
                 format!("uv installer launch failed (is curl installed?): {}", e),
@@ -438,12 +457,13 @@ fn install_uv_standalone(dest: &Path, _region: &str) -> io::Result<PathBuf> {
             "irm https://astral.sh/uv/{}/install.ps1 | iex",
             UV_VERSION
         );
-        let status = Command::new("powershell")
-            .args(["-ExecutionPolicy", "ByPass", "-c", &script])
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-ExecutionPolicy", "ByPass", "-c", &script])
             .env("UV_INSTALL_DIR", dest)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .status()
+            .stderr(Stdio::piped());
+        hide_window(&mut cmd);
+        let status = cmd.status()
             .map_err(|e| io::Error::new(
                 io::ErrorKind::Other,
                 format!("uv PowerShell installer failed: {}", e),
@@ -470,5 +490,15 @@ fn install_uv_standalone(dest: &Path, _region: &str) -> io::Result<PathBuf> {
             io::ErrorKind::NotFound,
             format!("uv binary not found at {} after installer completed", uv_bin.display()),
         ))
+    }
+}
+
+/// Helper to hide the console window when spawning a subprocess on Windows.
+/// On other platforms, this is a no-op.
+pub fn hide_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
 }
